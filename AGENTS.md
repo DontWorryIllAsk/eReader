@@ -273,6 +273,8 @@ eReader/
 - [x] 无限滚动加载（滚动到底部自动加载下一批，每批 30 本）
 - [x] 单元测试（5 个搜索测试，共 113 个测试全部通过）
 
+### P5.1 - Windows EXE 打包与图标 ✅
+
 - [x] PyInstaller 打包（eReader.spec，onedir 模式，console=False）
 - [x] 安装脚本（dist/install.ps1：复制到 LocalAppData、创建快捷方式、注册 .epub 文件关联）
 - [x] 应用图标（blue book SVG → 多尺寸 ICO → 嵌入 EXE 资源）
@@ -316,3 +318,30 @@ Start-Process explorer
 # 方法3：运行 ie4uinit.exe -show（效果有限）
 ie4uinit.exe -show
 ```
+
+## Git 仓库
+
+- **远程仓库**：https://github.com/william22076/eReader
+- **Git 路径**：`C:\Program Files\Git\cmd\git.exe`（当前终端 PATH 未包含，需用完整路径）
+- **Git 用户**：William <william22076@users.noreply.github.com>
+
+## 版本历史
+
+### v1.0.0 (2026-06-27)
+
+首次发布，包含全部 P1-P7 功能。
+
+| 阶段 | 功能 | 测试数 |
+|------|------|--------|
+| P1 | 核心阅读器（EPUB 解析、WebEngine 渲染、翻页、章节导航） | 50 |
+| P2 | 阅读自定义（字体/字号/4 种底色主题） | - |
+| P3 | 书库管理 + 本地导入（网格视图、拖入/选择导入、封面显示） | - |
+| P3.5 | 全屏阅读模式（F11/Esc、工具栏自动隐藏） | - |
+| P3.6 | 阅读进度持久化（2 秒防抖、关闭时 flush） | 7 |
+| P4 | 标注功能（高亮/划线/书签、浮动工具栏、持久化） | 16 |
+| P5 | 整体打磨（QSS 4 主题、SVG 图标、快捷键、窗口记忆） | 7 |
+| P5.1 | Windows EXE 打包与图标（PyInstaller、DIB/PNG ICO、安装脚本） | - |
+| P6 | 大文件性能优化（懒加载、span 合并、正则替代 BS4、行级分页） | 28 |
+| P7 | 书库搜索与无限滚动（关键字搜索、每批 30 本滚动加载） | 5 |
+
+**总计**：113 个单元测试全部通过
