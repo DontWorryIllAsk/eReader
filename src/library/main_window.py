@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self._reader_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._reader_widget = ReaderWidget(self._settings)
         self._reader_widget.exit_fullscreen_requested.connect(self.toggle_fullscreen)
+        self._reader_widget.toggle_ribbon_requested.connect(self._toggle_ribbon)
         self._reader_widget.reading_progress_changed.connect(self._on_reading_progress_debounced)
         self._reader_widget.text_selected.connect(self._on_text_selected)
         self._reader_widget.annotation_clicked.connect(self._on_annotation_clicked)
@@ -162,12 +163,10 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
 
         prev_chapter_action = QAction(get_icon("prev-chapter"), "Previous Chapter", self)
-        prev_chapter_action.setShortcut(QKeySequence("Ctrl+Left"))
         prev_chapter_action.triggered.connect(self._reader_widget.prev_chapter)
         view_menu.addAction(prev_chapter_action)
 
         next_chapter_action = QAction(get_icon("next-chapter"), "Next Chapter", self)
-        next_chapter_action.setShortcut(QKeySequence("Ctrl+Right"))
         next_chapter_action.triggered.connect(self._reader_widget.next_chapter)
         view_menu.addAction(next_chapter_action)
 
@@ -250,11 +249,17 @@ class MainWindow(QMainWindow):
 
         self._main_toolbar = toolbar
 
+        self._ribbon_collapsed = False
+
     def _setup_shortcuts(self) -> None:
         """Set up global shortcuts that work even when web engine has focus."""
         self._esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._esc_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self._esc_shortcut.activated.connect(self._on_esc_shortcut)
+
+        ribbon_shortcut = QShortcut(QKeySequence("Ctrl+F1"), self)
+        ribbon_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        ribbon_shortcut.activated.connect(self._toggle_ribbon)
 
         for i, theme_mode in enumerate([ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.SEPIA, ThemeMode.GREEN], 1):
             shortcut = QShortcut(QKeySequence(f"Ctrl+{i}"), self)
@@ -356,6 +361,19 @@ class MainWindow(QMainWindow):
         else:
             self._exit_fullscreen()
 
+    @Slot()
+    def _toggle_ribbon(self) -> None:
+        """Toggle menu bar and toolbar visibility (collapse/expand ribbon)."""
+        self._ribbon_collapsed = not self._ribbon_collapsed
+        if self._ribbon_collapsed:
+            self.menuBar().hide()
+            self._main_toolbar.hide()
+        else:
+            self.menuBar().show()
+            self._main_toolbar.show()
+        self._reader_widget.set_ribbon_collapsed(self._ribbon_collapsed)
+        QTimer.singleShot(500, self._reader_widget.repaginate)
+
     def _enter_fullscreen(self) -> None:
         """Enter fullscreen reading mode."""
         self._settings_widget.hide()
@@ -372,8 +390,12 @@ class MainWindow(QMainWindow):
     def _exit_fullscreen(self) -> None:
         """Exit fullscreen reading mode."""
         self._fullscreen = False
-        self.menuBar().show()
-        self._main_toolbar.show()
+        if self._ribbon_collapsed:
+            self.menuBar().hide()
+            self._main_toolbar.hide()
+        else:
+            self.menuBar().show()
+            self._main_toolbar.show()
         self._reader_widget.set_fullscreen_mode(False)
         self.showNormal()
 

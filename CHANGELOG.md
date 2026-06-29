@@ -1,5 +1,21 @@
 # eReader Changelog
 
+## v1.1.0 (2026-06-29)
+
+### P8 - 折叠功能区 + 鼠标翻页 + Bug 修复
+- 折叠功能区按钮（阅读器工具栏 ▲/▼ 按钮，Ctrl+F1 快捷键）
+- 鼠标滚轮翻页（向下滚动→下一页，向上滚动→上一页，累积阈值 120 避免误触）
+- Ctrl+Left/Right 章节导航（QShortcut 绑定，不依赖菜单栏可见性）
+- 章节第一页按左箭头→前一章节最后一页（skipInitialShow 避免先闪第一页）
+- Ctrl+Left→前一章节第一页（与自动翻页行为区分）
+- 修复折叠后翻页空白（computePageBreaks 测量前重置 clipPath）
+- 修复折叠按钮点击后首次翻页无响应（clicked 后 setFocus 回 web view）
+- 修复 Ctrl+Left/Right 在折叠后失效（从菜单 QAction 移除快捷键，改用 ReaderWidget QShortcut）
+- 修复 eventFilter 拦截 Ctrl+Left/Right（web view + ReaderWidget 双重 eventFilter）
+
+### 测试
+- 113 个单元测试全部通过
+
 ## v1.0.0 (2026-06-26)
 
 ### P1 - 核心阅读器

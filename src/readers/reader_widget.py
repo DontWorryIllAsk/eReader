@@ -4,13 +4,14 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QUrl
-from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QToolBar,
     QVBoxLayout,
@@ -110,7 +111,7 @@ function computePageBreaks() {{
     var vh = viewport.clientHeight;
     if (vh <= 0) return false;
 
-    content.style.transform = 'translateY(0px)';
+    content.style.clipPath = 'none';
 
     pageBreaks = [0];
     var contentRect = content.getBoundingClientRect();
@@ -279,6 +280,8 @@ function prevPage() {{
     }}
 }}
 
+var skipInitialShow = false;
+
 function initPagination() {{
     var viewport = document.getElementById('viewport');
     if (!viewport || viewport.clientHeight <= 0) {{
@@ -291,16 +294,23 @@ function initPagination() {{
     for (var i = 0; i < images.length; i++) {{
         if (!images[i].complete) pending++;
     }}
+    var doInit = function() {{
+        if (computePageBreaks()) {{
+            paginationReady = true;
+            if (skipInitialShow) {{
+                skipInitialShow = false;
+            }} else {{
+                showPage(0);
+            }}
+        }} else {{
+            setTimeout(initPagination, 100);
+        }}
+    }};
     if (pending > 0) {{
         var handler = function() {{
             pending--;
             if (pending <= 0) {{
-                setTimeout(function() {{
-                    if (computePageBreaks()) {{
-                        paginationReady = true;
-                        showPage(0);
-                    }}
-                }}, 100);
+                setTimeout(doInit, 100);
             }}
         }};
         for (var i = 0; i < images.length; i++) {{
@@ -311,45 +321,38 @@ function initPagination() {{
         }}
         setTimeout(function() {{
             if (!paginationReady) {{
-                if (computePageBreaks()) {{
-                    paginationReady = true;
-                    showPage(0);
-                }}
+                doInit();
             }}
         }}, 3000);
     }} else {{
-        if (computePageBreaks()) {{
-            paginationReady = true;
-            showPage(0);
-        }} else {{
-            setTimeout(initPagination, 100);
-        }}
+        doInit();
     }}
 }}
 
-var _resizeTimer = null;
 var _resizeSavedOffset = 0;
 
-window.onresize = function() {{
-    var viewport = document.getElementById('viewport');
-    if (!viewport || viewport.clientHeight <= 0) return;
+function _doRepaginate() {{
+    if (computePageBreaks() && pageBreaks.length >= 1) {{
+        paginationReady = true;
+        var best = 0;
+        for (var i = 0; i < pageBreaks.length; i++) {{
+            if (Math.abs(pageBreaks[i] - _resizeSavedOffset) < Math.abs(pageBreaks[best] - _resizeSavedOffset)) best = i;
+        }}
+        showPage(best);
+    }} else {{
+        setTimeout(_doRepaginate, 100);
+    }}
+}}
+
+window.onresize = function() {{}};
+
+function forceRepaginate() {{
     if (paginationReady && pageBreaks.length > 0) {{
         _resizeSavedOffset = pageBreaks[currentPage];
     }}
     paginationReady = false;
-    if (_resizeTimer) clearTimeout(_resizeTimer);
-    _resizeTimer = setTimeout(function() {{
-        _resizeTimer = null;
-        if (computePageBreaks() && pageBreaks.length > 0) {{
-            paginationReady = true;
-            var best = 0;
-            for (var i = 0; i < pageBreaks.length; i++) {{
-                if (Math.abs(pageBreaks[i] - _resizeSavedOffset) < Math.abs(pageBreaks[best] - _resizeSavedOffset)) best = i;
-            }}
-            showPage(best);
-        }}
-    }}, 200);
-}};
+    _doRepaginate();
+}}
 
 var annotations = [];
 var nextAnnId = 1;
@@ -523,7 +526,12 @@ document.addEventListener('click', function(e) {{
 
 
 class _ReaderWebView(QWebEngineView):
-    """Custom QWebEngineView that forwards Escape/F11 keys to parent."""
+    """Custom QWebEngineView that forwards Escape/F11 keys to parent and handles wheel navigation."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._wheel_accumulator = 0
+        self._wheel_threshold = 120
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F11):
@@ -540,6 +548,20 @@ class _ReaderWebView(QWebEngineView):
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
 
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+        self._wheel_accumulator += delta
+        if abs(self._wheel_accumulator) >= self._wheel_threshold:
+            if self._wheel_accumulator < 0:
+                self.page().runJavaScript("if (paginationReady) nextPage();")
+            else:
+                self.page().runJavaScript("if (paginationReady) prevPage();")
+            self._wheel_accumulator = 0
+        else:
+            event.ignore()
+
 
 class ReaderWidget(QWidget):
     """Main EPUB reader widget with WebEngine-based rendering and pagination."""
@@ -549,7 +571,7 @@ class ReaderWidget(QWidget):
     reading_progress_changed = Signal(int, float)
     text_selected = Signal(str, int, int)
     annotation_clicked = Signal(int)
-
+    toggle_ribbon_requested = Signal()
     link_clicked = Signal(str)
 
     def __init__(self, settings: ReaderSettings | None = None, parent: Optional[QWidget] = None) -> None:
@@ -562,6 +584,7 @@ class ReaderWidget(QWidget):
         self._toolbar_auto_hidden = False
         self._pending_position: float = 0.0
         self._pending_annotations: list[dict] = []
+        self._pending_go_last_page: bool = False
         self._closing = False
         self._setup_ui()
 
@@ -579,7 +602,11 @@ class ReaderWidget(QWidget):
         self._web_view.page().titleChanged.connect(self._on_title_changed)
         self._web_view.page().loadFinished.connect(self._on_load_finished)
         self._web_view.installEventFilter(self)
+        self.installEventFilter(self)
         layout.addWidget(self._web_view, 1)
+
+        QShortcut(QKeySequence("Ctrl+Left"), self, self.prev_chapter)
+        QShortcut(QKeySequence("Ctrl+Right"), self, self.next_chapter)
 
         self._web_view.setHtml(
             "<html><body style='margin:0;background-color:white;'></body>"
@@ -633,6 +660,20 @@ class ReaderWidget(QWidget):
         self._exit_fullscreen_action.setVisible(False)
         self._exit_fullscreen_action.triggered.connect(self._request_exit_fullscreen)
         toolbar.addAction(self._exit_fullscreen_action)
+
+        self._ribbon_collapse_btn = QPushButton("▲")
+        self._ribbon_collapse_btn.setFixedSize(24, 24)
+        self._ribbon_collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ribbon_collapse_btn.setToolTip("Collapse Ribbon (Ctrl+F1)")
+        self._ribbon_collapse_btn.setStyleSheet(
+            "QPushButton { border: 1px solid #ccc; border-radius: 3px; "
+            "background: #f5f5f5; font-size: 11px; color: #444; padding: 0px; }"
+            "QPushButton:hover { background: #e0e0e0; border-color: #999; }"
+            "QPushButton:pressed { background: #d0d0d0; }"
+        )
+        self._ribbon_collapse_btn.clicked.connect(self.toggle_ribbon_requested.emit)
+        self._ribbon_collapse_btn.clicked.connect(lambda: self._web_view.setFocus())
+        toolbar.addWidget(self._ribbon_collapse_btn)
 
         return toolbar
 
@@ -722,6 +763,8 @@ class ReaderWidget(QWidget):
         if ok and self._epub_reader is not None:
             pos = self._pending_position
             self._pending_position = 0.0
+            go_last = self._pending_go_last_page
+            self._pending_go_last_page = False
             if pos > 0:
                 js = (
                     f"initPagination(); setTimeout(function() {{"
@@ -729,6 +772,14 @@ class ReaderWidget(QWidget):
                     f" var p = Math.min(Math.floor({pos} * pageBreaks.length), pageBreaks.length - 1);"
                     f" showPage(p);"
                     f" }} }}, 300);"
+                )
+            elif go_last:
+                js = (
+                    "skipInitialShow = true; initPagination();"
+                    " setTimeout(function() {"
+                    " if (paginationReady && pageBreaks.length > 0) {"
+                    " showPage(pageBreaks.length - 1);"
+                    " } }, 300);"
                 )
             else:
                 js = "initPagination();"
@@ -746,7 +797,7 @@ class ReaderWidget(QWidget):
                 self.next_chapter()
                 return
             if title == "PREV_CHAPTER":
-                self.prev_chapter()
+                self._go_prev_chapter_last_page()
                 return
             if title.startswith("TEXT_SELECTED:"):
                 info = json.loads(title[len("TEXT_SELECTED:"):])
@@ -799,8 +850,15 @@ class ReaderWidget(QWidget):
 
     @Slot()
     def prev_chapter(self) -> None:
-        """Navigate to the previous chapter."""
+        """Navigate to the previous chapter, showing the first page."""
         if self._epub_reader and self._current_chapter_index > 0:
+            self._display_chapter(self._current_chapter_index - 1)
+            self.chapter_changed.emit(self._current_chapter_index)
+
+    def _go_prev_chapter_last_page(self) -> None:
+        """Navigate to the previous chapter, showing the last page."""
+        if self._epub_reader and self._current_chapter_index > 0:
+            self._pending_go_last_page = True
             self._display_chapter(self._current_chapter_index - 1)
             self.chapter_changed.emit(self._current_chapter_index)
 
@@ -816,33 +874,64 @@ class ReaderWidget(QWidget):
         if event.key() == Qt.Key.Key_Escape and self._fullscreen_mode:
             self._request_exit_fullscreen()
             return
+        modifiers = event.modifiers()
         if event.key() in (Qt.Key.Key_Right, Qt.Key.Key_PageDown):
-            self.next_page()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                self.next_chapter()
+            else:
+                self.next_page()
         elif event.key() in (Qt.Key.Key_Left, Qt.Key.Key_PageUp):
-            self.prev_page()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                self.prev_chapter()
+            else:
+                self.prev_page()
         else:
             super().keyPressEvent(event)
 
     def eventFilter(self, obj, event) -> bool:
-        """Catch Escape/F11 from the web view before Chromium consumes them."""
-        if obj is self._web_view and event.type() == event.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Escape and self._fullscreen_mode:
-                self._request_exit_fullscreen()
-                return True
-            if event.key() == Qt.Key.Key_F11:
-                return True
+        """Catch Escape/F11/Ctrl+Arrow before Chromium or child widgets consume them."""
+        if event.type() == event.Type.KeyPress:
+            if obj is self._web_view:
+                if event.key() == Qt.Key.Key_Escape and self._fullscreen_mode:
+                    self._request_exit_fullscreen()
+                    return True
+                if event.key() == Qt.Key.Key_F11:
+                    return True
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                if event.key() == Qt.Key.Key_Right:
+                    self.next_chapter()
+                    return True
+                if event.key() == Qt.Key.Key_Left:
+                    self.prev_chapter()
+                    return True
         return super().eventFilter(obj, event)
 
     def set_fullscreen_mode(self, enabled: bool) -> None:
         """Enable or disable fullscreen reading mode."""
         self._fullscreen_mode = enabled
         self._exit_fullscreen_action.setVisible(enabled)
+        self._ribbon_collapse_btn.setVisible(not enabled)
         if enabled:
             self._toolbar.hide()
             self._toolbar_auto_hidden = True
         else:
             self._toolbar.show()
             self._toolbar_auto_hidden = False
+
+    def set_ribbon_collapsed(self, collapsed: bool) -> None:
+        """Update the ribbon collapse button state."""
+        if collapsed:
+            self._ribbon_collapse_btn.setText("▼")
+            self._ribbon_collapse_btn.setToolTip("Expand Ribbon (Ctrl+F1)")
+        else:
+            self._ribbon_collapse_btn.setText("▲")
+            self._ribbon_collapse_btn.setToolTip("Collapse Ribbon (Ctrl+F1)")
+
+    def repaginate(self) -> None:
+        """Force re-pagination after layout change (e.g. ribbon collapse/expand)."""
+        if self._closing or self._epub_reader is None:
+            return
+        self._web_view.page().runJavaScript("forceRepaginate();")
 
     def _request_exit_fullscreen(self) -> None:
         """Request the main window to exit fullscreen mode."""
@@ -876,6 +965,11 @@ class ReaderWidget(QWidget):
         super().resizeEvent(event)
         if self._closing:
             return
+        if not hasattr(self, '_resize_timer'):
+            self._resize_timer = QTimer(self)
+            self._resize_timer.setSingleShot(True)
+            self._resize_timer.timeout.connect(self.repaginate)
+        self._resize_timer.start(400)
 
     @property
     def current_chapter_index(self) -> int:

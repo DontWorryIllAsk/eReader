@@ -273,6 +273,48 @@ eReader/
 - [x] 无限滚动加载（滚动到底部自动加载下一批，每批 30 本）
 - [x] 单元测试（5 个搜索测试，共 113 个测试全部通过）
 
+### P8 - 折叠功能区 + 鼠标翻页 + Bug 修复 ✅
+
+- [x] 折叠功能区按钮（阅读器工具栏 ▲/▼ 按钮，Ctrl+F1 快捷键）
+- [x] 折叠/展开时自动重新分页（forceRepaginate + clipPath 重置）
+- [x] 鼠标滚轮翻页（向下滚动→下一页，向上滚动→上一页，累积阈值 120 避免误触）
+- [x] Ctrl+Left/Right 章节导航（QShortcut 绑定，不依赖菜单栏可见性）
+- [x] 章节第一页按左箭头→前一章节最后一页（skipInitialShow 避免先闪第一页）
+- [x] Ctrl+Left→前一章节第一页（与自动翻页行为区分）
+- [x] 修复折叠后翻页空白（computePageBreaks 测量前重置 clipPath）
+- [x] 修复折叠按钮点击后首次翻页无响应（clicked 后 setFocus 回 web view）
+- [x] 修复 Ctrl+Left/Right 在折叠后失效（从菜单 QAction 移除快捷键，改用 ReaderWidget QShortcut）
+- [x] 修复 eventFilter 拦截 Ctrl+Left/Right（web view + ReaderWidget 双重 eventFilter）
+- [x] 单元测试（113 个测试全部通过）
+
+#### P8 技术要点
+
+1. **折叠功能区**（`reader_widget.py` + `main_window.py`）：
+   - `ReaderWidget._ribbon_collapse_btn`：阅读器工具栏上的 ▲/▼ 按钮
+   - `toggle_ribbon_requested` 信号 → `MainWindow._toggle_ribbon()` → 隐藏/显示 menuBar + mainToolbar
+   - `set_ribbon_collapsed()` 更新按钮文字和 tooltip
+   - 折叠后 500ms 调用 `repaginate()` → `forceRepaginate()` 重新计算分页
+
+2. **分页测量修复**（`reader_widget.py` JS）：
+   - `computePageBreaks()` 测量前必须重置 `clipPath` 为 `none`：Chrome 的 `getBoundingClientRect()` 受 `clipPath` 影响，返回裁剪后的边界框而非完整边界框，导致 `contentRect.top` 错误
+   - 不需要重置 `transform`：`getBoundingClientRect()` 返回视口相对坐标，`rect.top - contentTop` 中 transform 偏移量互相抵消
+   - `_doRepaginate()` 使用 `pageBreaks.length >= 1`（而非 `> 1`），避免单页章节无限重试
+
+3. **鼠标滚轮翻页**（`reader_widget.py`）：
+   - `_ReaderWebView.wheelEvent()` 重写，累积 `angleDelta().y()` 到 `_wheel_accumulator`
+   - 累积量达到阈值 120 时触发 `nextPage()`/`prevPage()`，然后重置累积器
+   - 未达到阈值时 `event.ignore()`，不阻止默认行为
+
+4. **Ctrl+Left/Right 章节导航**（`reader_widget.py`）：
+   - `ReaderWidget` 上直接创建 `QShortcut`，绑定 `prev_chapter()`/`next_chapter()`
+   - 从菜单 QAction 上移除 `setShortcut()`，避免菜单栏隐藏后快捷键失效
+   - `eventFilter` 同时安装在 `self._web_view` 和 `self` 上，拦截 Chromium 和子控件的 Ctrl+Left/Right
+
+5. **章节导航行为区分**：
+   - `prev_chapter()`：Ctrl+Left → 上一章节第一页
+   - `_go_prev_chapter_last_page()`：第一页按左箭头 → 上一章节最后一页（使用 `skipInitialShow` + `_pending_go_last_page`）
+   - `next_chapter()`：Ctrl+Right 或最后一页按右箭头 → 下一章节第一页
+
 ### P5.1 - Windows EXE 打包与图标 ✅
 
 - [x] PyInstaller 打包（eReader.spec，onedir 模式，console=False）
@@ -343,5 +385,13 @@ ie4uinit.exe -show
 | P5.1 | Windows EXE 打包与图标（PyInstaller、DIB/PNG ICO、安装脚本） | - |
 | P6 | 大文件性能优化（懒加载、span 合并、正则替代 BS4、行级分页） | 28 |
 | P7 | 书库搜索与无限滚动（关键字搜索、每批 30 本滚动加载） | 5 |
+
+**总计**：113 个单元测试全部通过
+
+### v1.1.0 (2026-06-29)
+
+| 阶段 | 功能 | 测试数 |
+|------|------|--------|
+| P8 | 折叠功能区 + 鼠标翻页 + Bug 修复 | - |
 
 **总计**：113 个单元测试全部通过
